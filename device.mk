@@ -387,6 +387,8 @@ PRODUCT_PACKAGES += \
 # Radio
 PRODUCT_PACKAGES += \
     librmnetctl \
+    libsqlite.vendor \
+    libsysutils.vendor \
     android.hardware.radio@1.5.vendor \
     android.hardware.radio.config@1.2 \
     android.hardware.radio.config@1.2.vendor \
