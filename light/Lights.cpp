@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 The LineageOS Project
+ * Copyright (C) 2023-2024 The LineageOS Project
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -7,87 +7,84 @@
 //#define HAL_DEBUG
 #define LOG_TAG "LightService"
 
-#include "Light.h"
+#include "Lights.h"
 
 #ifdef HAL_DEBUG
 #include <android-base/logging.h>
 #endif
 
 namespace {
-using android::hardware::light::V2_0::LightState;
 
 static constexpr int DEFAULT_MAX_BRIGHTNESS = 255;
 
-static uint32_t rgbToBrightness(const LightState& state) {
+static uint32_t rgbToBrightness(const HwLightState& state) {
     uint32_t color = state.color & 0x00ffffff;
     return ((77 * ((color >> 16) & 0xff)) + (150 * ((color >> 8) & 0xff)) + (29 * (color & 0xff))) >>
            8;
 }
 
-static bool isLit(const LightState& state) {
+static bool isLit(const HwLightState& state) {
     return (state.color & 0x00ffffff);
 }
 
 }  // anonymous namespace
 
+namespace aidl {
 namespace android {
 namespace hardware {
 namespace light {
-namespace V2_0 {
-namespace implementation {
 
-Light::Light(std::pair<std::ofstream, uint32_t>&& lcd_backlight, std::ofstream&& red_breath,
-             std::ofstream&& red_led, std::ofstream&& green_breath, std::ofstream&& green_led)
+Lights::Lights(std::pair<std::ofstream, uint32_t>&& lcd_backlight, std::ofstream&& red_breath,
+               std::ofstream&& red_led, std::ofstream&& green_breath, std::ofstream&& green_led)
     : mLcdBacklight(std::move(lcd_backlight)),
       mRedBreath(std::move(red_breath)),
       mRedLed(std::move(red_led)),
       mGreenBreath(std::move(green_breath)),
       mGreenLed(std::move(green_led)) {
-    auto attnFn(std::bind(&Light::setAttentionLight, this, std::placeholders::_1));
-    auto backlightFn(std::bind(&Light::setLcdBacklight, this, std::placeholders::_1));
-    auto batteryFn(std::bind(&Light::setBatteryLight, this, std::placeholders::_1));
+    auto attnFn(std::bind(&Lights::setAttentionLight, this, std::placeholders::_1));
+    auto backlightFn(std::bind(&Lights::setLcdBacklight, this, std::placeholders::_1));
+    auto batteryFn(std::bind(&Lights::setBatteryLight, this, std::placeholders::_1));
     auto buttonsFn(
-        std::bind(&Light::setButtonsBacklight, this, std::placeholders::_1));  // fake button dummy
-    auto notifFn(std::bind(&Light::setNotificationLight, this, std::placeholders::_1));
-    mLights.emplace(std::make_pair(Type::ATTENTION, attnFn));
-    mLights.emplace(std::make_pair(Type::BACKLIGHT, backlightFn));
-    mLights.emplace(std::make_pair(Type::BATTERY, batteryFn));
-    mLights.emplace(std::make_pair(Type::BUTTONS, buttonsFn));  // fake button dummy
-    mLights.emplace(std::make_pair(Type::NOTIFICATIONS, notifFn));
+        std::bind(&Lights::setButtonsBacklight, this, std::placeholders::_1));  // fake button dummy
+    auto notifFn(std::bind(&Lights::setNotificationLight, this, std::placeholders::_1));
+    mLights.emplace(std::make_pair(LightType::ATTENTION, attnFn));
+    mLights.emplace(std::make_pair(LightType::BACKLIGHT, backlightFn));
+    mLights.emplace(std::make_pair(LightType::BATTERY, batteryFn));
+    mLights.emplace(std::make_pair(LightType::BUTTONS, buttonsFn));  // fake button dummy
+    mLights.emplace(std::make_pair(LightType::NOTIFICATIONS, notifFn));
 }
 
-// Methods from ::android::hardware::light::V2_0::ILight follow.
-Return<Status> Light::setLight(Type type, const LightState& state) {
-    auto it = mLights.find(type);
+// Methods from ::aidl::android::hardware::light::BnLights follow.
+ndk::ScopedAStatus Lights::setLightState(int32_t id, const HwLightState& state) {
+    auto it = mLights.find(static_cast<LightType>(id));
 
     if (it == mLights.end()) {
-        return Status::LIGHT_NOT_SUPPORTED;
+        return ndk::ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
     }
 
     it->second(state);
 
-    return Status::SUCCESS;
+    return ndk::ScopedAStatus::ok();
 }
 
-Return<void> Light::getSupportedTypes(getSupportedTypes_cb _hidl_cb) {
-    std::vector<Type> types;
+#define AutoHwLight(light) {.id = (int32_t)light, .type = light, .ordinal = 0}
+
+ndk::ScopedAStatus Lights::getLights(std::vector<HwLight> *_aidl_return) {
 
     for (auto const& light : mLights) {
-        types.push_back(light.first);
+        _aidl_return->push_back(AutoHwLight(light.first));
     }
 
-    _hidl_cb(types);
-
-    return Void();
+    return ndk::ScopedAStatus::ok();
 }
 
-void Light::setAttentionLight(const LightState& state) {
+void Lights::setAttentionLight(const HwLightState& state) {
     std::lock_guard<std::mutex> lock(mLock);
     mAttentionState = state;
     setSpeakerBatteryLightLocked();
 }
 
-void Light::setLcdBacklight(const LightState& state) {
+void Lights::setLcdBacklight(const HwLightState& state) {
     std::lock_guard<std::mutex> lock(mLock);
 
     uint32_t brightness = rgbToBrightness(state);
@@ -107,25 +104,25 @@ void Light::setLcdBacklight(const LightState& state) {
     mLcdBacklight.first << brightness << std::endl;
 }
 
-void Light::setButtonsBacklight(const LightState& state) {
+void Lights::setButtonsBacklight(const HwLightState& state) {
     // We have no buttons light management, so do nothing.
     // This function required to shut up warnings about missing functionality.
     (void)state;
 }
 
-void Light::setBatteryLight(const LightState& state) {
+void Lights::setBatteryLight(const HwLightState& state) {
     std::lock_guard<std::mutex> lock(mLock);
     mBatteryState = state;
     setSpeakerBatteryLightLocked();
 }
 
-void Light::setNotificationLight(const LightState& state) {
+void Lights::setNotificationLight(const HwLightState& state) {
     std::lock_guard<std::mutex> lock(mLock);
     mNotificationState = state;
     setSpeakerBatteryLightLocked();
 }
 
-void Light::setSpeakerBatteryLightLocked() {
+void Lights::setSpeakerBatteryLightLocked() {
     if (isLit(mNotificationState)) {
         setSpeakerLightLocked(mNotificationState);
     } else if (isLit(mAttentionState)) {
@@ -134,11 +131,11 @@ void Light::setSpeakerBatteryLightLocked() {
         setSpeakerLightLocked(mBatteryState);
     } else {
         // No active LED scenarios, turn off the LEDs
-        setSpeakerLightLocked(LightState{}); // Set an empty LightState to turn off the LEDs
+        setSpeakerLightLocked(HwLightState{}); // Set an empty LightState to turn off the LEDs
     }
 }
 
-void Light::setSpeakerLightLocked(const LightState& state) {
+void Lights::setSpeakerLightLocked(const HwLightState& state) {
     int red, green;
     int breath;
     int onMs, offMs;
@@ -153,14 +150,14 @@ void Light::setSpeakerLightLocked(const LightState& state) {
     mGreenBreath << 0 << std::endl;
 
     switch (state.flashMode) {
-        case Flash::TIMED:
+        case FlashMode::TIMED:
             onMs = state.flashOnMs;
             offMs = state.flashOffMs;
 #ifdef HAL_DEBUG
             stateMode = 1;
 #endif
             break;
-        case Flash::NONE:
+        case FlashMode::NONE:
         default:
             onMs = 0;
             offMs = 0;
@@ -225,8 +222,7 @@ void Light::setSpeakerLightLocked(const LightState& state) {
     }
 }
 
-}  // namespace implementation
-}  // namespace V2_0
 }  // namespace light
 }  // namespace hardware
 }  // namespace android
+}  // namespace aidl

@@ -4,24 +4,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#define LOG_TAG "android.hardware.light@2.0-service.asus_sdm660"
+#define LOG_TAG "android.hardware.light-service.asus_sdm660"
 
+#include <android/binder_manager.h>
+#include <android/binder_process.h>
 #include <android-base/logging.h>
-#include <hidl/HidlTransportSupport.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <utils/Errors.h>
 
-#include "Light.h"
+#include "Lights.h"
 
-// libhwbinder:
-using android::hardware::configureRpcThreadpool;
-using android::hardware::joinRpcThreadpool;
-
-// Generated HIDL files
-using android::hardware::light::V2_0::ILight;
-using android::hardware::light::V2_0::implementation::Light;
+using aidl::android::hardware::light::Lights;
 
 // LCD
 const static std::string kLcdBacklightPath = "/sys/class/leds/lcd-backlight/brightness";
@@ -82,22 +76,15 @@ int main() {
         return -errno;
     }
 
-    android::sp<ILight> service =
-        new Light({std::move(lcdBacklight), lcdMaxBrightness}, std::move(redBreath),
+    ABinderProcess_setThreadPoolMaxThreadCount(0);
+    std::shared_ptr<Lights> lights = ndk::SharedRefBase::make<Lights>(
+            std::make_pair(std::move(lcdBacklight), lcdMaxBrightness), std::move(redBreath),
                   std::move(redLed), std::move(greenBreath), std::move(greenLed));
 
-    configureRpcThreadpool(1, true);
+    const std::string instance = std::string() + Lights::descriptor + "/default";
+    binder_status_t status = AServiceManager_addService(lights->asBinder().get(), instance.c_str());
+    CHECK(status == STATUS_OK);
 
-    android::status_t status = service->registerAsService();
-
-    if (status != android::OK) {
-        LOG(ERROR) << "Cannot register Light HAL service";
-        return 1;
-    }
-
-    LOG(INFO) << "Light HAL Ready.";
-    joinRpcThreadpool();
-    // Under normal cases, execution will not reach this line.
-    LOG(ERROR) << "Light HAL failed to join thread pool.";
-    return 1;
+    ABinderProcess_joinThreadPool();
+    return EXIT_FAILURE; // should not reach
 }
