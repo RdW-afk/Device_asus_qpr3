@@ -232,6 +232,9 @@ PRODUCT_COPY_FILES += \
 PRODUCT_PACKAGES += \
     android.hardware.keymaster@3.0.vendor
 
+# Kernal
+PRODUCT_OTA_ENFORCE_VINTF_KERNEL_REQUIREMENTS := true
+
 # Lights
 PRODUCT_PACKAGES += \
     android.hardware.light-service.asus_sdm660
